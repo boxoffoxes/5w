@@ -17,7 +17,7 @@
 	.long \codeword
 .endm
 
-.macro code label
+.macro code label name
 	word \label prim_\label
 	.section .text
 	.align CELL_SIZE
@@ -28,14 +28,14 @@ prim_\label:
 	jmp *(%eax)
 .endm
 
-.macro quot label
+.macro quot label name
 	word \label doWord
 .endm
 .macro endq
 	.long done
 .endm
 
-.macro data label
+.macro data label name
 	word \label doData
 	.long (9999f-.)>>CELL_BITS
 .endm
@@ -44,12 +44,12 @@ prim_\label:
 9999:
 .endm
 
-.macro var label val=0
+.macro var label val=0 name
 	word \label doVar
 var_\label:
 	.long \val
 .endm
-.macro const label val
+.macro const label val name
 	word \label doConst
 const_\label:
 	.long \val
@@ -66,6 +66,15 @@ const_\label:
 .macro align_dp
 	add $CELL_SIZE-1, %edi
 	and $0xfffffffc, %edi
+.endm
+.macro comparison ins
+	pop %eax
+	pop %edx
+	xor %ecx, %ecx
+	cmpl %eax, %edx
+	\ins %cl
+	dec %ecx
+	push %ecx
 .endm
 
 # buffers
@@ -229,14 +238,14 @@ next
 
 # Quotation creation
 var nesting
-code begin
+code begin "["
 	# TODO: re-write to reflect new create-and-copy semantics
 	incl var_nesting
 	push %edi
 	mov $doWord, %eax
 	stosl
 next
-code end
+code end  "]"
 	# 1. write `done` to end current quot
 	mov $done, %eax
 	stosl
@@ -276,32 +285,35 @@ code dsp
 	push %esp
 next
 
-# Reading and writing the heap via the address register
+# Reading and writing via the address register
 code compile_lit
 	mov $lit, %eax
 	stosl
 	pop %eax
 	stosl
 next
-code comma
+code comma ","
 	pop %eax
 	stosl
 next
 code here  # -- addr
 	push %edi
 next
+code there  # addr --
+	pop %edi
+next
 
 # General memory access
-code get   # addr -- x
+code get "@"  # addr -- x
 	pop %eax
 	push (%eax)
 next
-code set   # x addr --
+code set "!"  # x addr --
 	pop %eax
 	pop %edx
 	mov %edx, (%eax)
 next
-code setbinc  # byte addr -- addr+1
+code setbinc "!b+"  # byte addr -- addr+1
 	pop %eax
 	pop %edx
 	movb %dl, (%eax)
@@ -350,14 +362,14 @@ code keeps # str --
 next
 
 # arithmetic
-code add
+code add "+"
 	pop %eax
 	add %eax, (%esp)
 next
 
 
 # logical operators
-code btw    # n lower upper -- bool
+code btw "btw?"   # n lower upper -- bool
 	pop %edx  # upper bound
 	pop %ecx  # lower bound
 	pop %eax  # n
@@ -369,28 +381,13 @@ code btw    # n lower upper -- bool
 	dec %ecx
 	push %ecx
 next
-code matches  # n1 n2 -- n1 bool
-	# semi-destructive equals for pattern matching
-	pop %eax
-	xor %ecx, %ecx
-	cmpl (%esp), %eax
-	setne %cl
-	dec %ecx
-	push %ecx
-next
-code ule
+code ule "u<="
 	# unsigned less-or-equal
-	pop %eax
-	pop %edx
-	xor %ecx, %ecx
-	cmpl %eax, %edx
-	seta %cl
-	dec %ecx
-	push %ecx
+	comparison seta
 next
 
 # Conditionals
-code qm  # bool v1 v2 -- v
+code qm "?"  # bool v1 v2 -- v
 	# "question-mark" if bool is true return v1 else return v2
 	xor %edx, %edx
 	xor %ecx, %ecx
@@ -574,7 +571,6 @@ quot if_true
 	.long quote, nop, if
 endq
 
-
 quot nop
 endq
 
@@ -582,15 +578,13 @@ quot is_space
 	.long lit, 32, ule
 endq
 
-const SysRead __NR_read
-
 var out_channel 0
 var in_channel 1
 var err_channel 2
 
 quot read_in  # len buf -- n
 	.long in_channel, get
-	.long SysRead, syscall3
+	.long lit, __NR_read, syscall3
 endq
 
 var dict

@@ -9,7 +9,8 @@ all: $(TARGET)
 # Misc/all-words
 
 sloc: $(TARGET).S
-	cat $< | grep -v '^\s*$$' | grep -v '^\s*#[^a-z]' | grep -v '^\s*//' | wc -l
+	grep -v '^\s*\(\|#[^a-z].*\)$$' $< | wc -l
+#	cat $< | grep -v '^\s*$$' | grep -v '^\s*#[^a-z]' | grep -v '^\s*//' | wc -l
 
 %: %.S
 	$(ASSEMBLER32) -o $@ $<
