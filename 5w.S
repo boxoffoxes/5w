@@ -10,6 +10,10 @@
 .set SCRATCH_SIZE, (128*1024)  # 128k
 .set SCRATCH_OFFSET, SCRATCH_SIZE
 
+.set BEHAVIOUR_OFFS, 1*CELL_SIZE
+.set XT_OFFS       , 2*CELL_SIZE
+.set LABEL_OFFS    , 3*CELL_SIZE
+
 .macro word label codeword
 	.section .data
 	.align CELL_SIZE
@@ -53,6 +57,12 @@ var_\label:
 	word \label doConst
 const_\label:
 	.long \val
+.endm
+.macro exception label
+	word \label doVar
+exc_\label:
+	.long 0
+	.asciz "\label"
 .endm
 
 .macro pushrs reg
@@ -103,7 +113,7 @@ hello_world:
 
 .align CELL_SIZE
 cold_start:
-	.long word, puts
+	.long word, find, call
 	.long word, puts
 	.long lit, hello_world, puts
 	.long lit, 0, exit 
@@ -198,6 +208,9 @@ next
 code nip
 	pop %eax
 	mov %eax, (%esp)
+next
+code over
+	push 4(%esp)
 next
 
 # literals
@@ -449,17 +462,22 @@ quot exit1
 endq
 
 # exceptions
-quot _q_raise_01
-	.long call
-endq
 quot raise
 	.long dup, get
-	.long lit, 0,   quote, exit1,          case
-	.long           quote, _q_raise_01,    otherwise
+	.long lit, 0,   quote, unhandled,      case
+	.long drop, call
+endq
+unhandled_exception:
+	.asciz "Unhandled exception: "
+.align CELL_SIZE, 0
+quot unhandled  # exc -- 
+	.long lit, unhandled_exception, puts
+	.long lit, CELL_SIZE, add, puts, nl
+	.long exit1
 endq
 
 # Memory mapping and allocation
-var MmapFailed
+exception MmapFailed
 quot _q_mmap_01
 	.long MmapFailed, raise
 endq
@@ -528,13 +546,34 @@ code lens  # str -- length
 	not %ecx
 	push %ecx
 next
+code eqs  # str str -- bool
+	# Are strings equal?
+	pushrs %esi
+	xor %ecx, %ecx
+	pop %edx
+	pop %esi
+1:
+	lodsl
+	cmp (%edx), %eax  # current cell equal?
+	setne %cl
+	jne 2f            # nope? then exit
+	lea 4(%edx), %edx # incr %edx to next cell
+	shr $12, %eax     # strings must be zero-padded to a full cell!
+	test %eax, %eax  # last byte is zero?
+	jz 2f            # if yes, then exit
+	jmp 1b
+2:
+	dec %ecx
+	push %ecx
+	poprs %esi
+next
 
 # output
 quot emit  # c --
 	.long dsp, lit, 1, swap, out_channel, get, lit, __NR_write, syscall3, drop
 endq
 quot put   # s n -- 
-	.long swap, out_channel, get, lit, __NR_write, syscall3
+	.long swap, out_channel, get, lit, __NR_write, syscall3, drop
 endq
 quot puts  # s -- 
 	.long dup, lens, put
@@ -571,11 +610,52 @@ quot if_true
 	.long quote, nop, if
 endq
 
+# header creation and access
+quot .behaviour
+	.long lit, BEHAVIOUR_OFFS, add
+endq
+quot .xt
+	.long lit, XT_OFFS, add
+endq
+quot .label
+	.long lit, LABEL_OFFS, add
+endq
+
+
+
+# dictionary search
+var dict
+exception NotFound
+quot _q_find_01
+	.long NotFound, raise
+endq
+quot _q_find_02  # str dict -- str dict'
+	.long get, lit, 0, quote, _q_find_01, case
+	.long over, over, .label, eqs
+endq
+quot find  # str -- xt behav 
+	.long dict,  quote, _q_find_02,  until
+	.long dup, .xt, get,  swap, .behaviour, get
+endq
+/* 
+[	
+	dict [	get  0 [ raise NotFound ] case
+		 	over over .label eqs?
+		 :: str dict -- str dict bool ] until
+	nip   dup .xt get   swap .behaviour get
+:: str -- xt behav ] as find
+*/
+
+# misc
+
 quot nop
 endq
 
 quot is_space
 	.long lit, 32, ule
+endq
+quot nl
+	.long lit, '\n', emit
 endq
 
 var out_channel 0
@@ -586,8 +666,6 @@ quot read_in  # len buf -- n
 	.long in_channel, get
 	.long lit, __NR_read, syscall3
 endq
-
-var dict
 
 
 
