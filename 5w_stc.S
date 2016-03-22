@@ -11,8 +11,13 @@
 .set SCRATCH_SIZE, (128*1024)  # 128k
 .set SCRATCH_OFFSET, SCRATCH_SIZE
 
+
+.set INS_CALL,    0xe8
+.set INS_LEA,     0x8d
+.set INS_RET,     0xc3
+
 # headers
-.macro publish label name behav=0
+.macro publish label name behav=bCompiled
 	.section .data
 	.align CELL_SIZE
 hdr_\label:
@@ -37,7 +42,7 @@ hdr_\label:
 # %esp - return stack ptr
 # %edi - Addr reg
 
-.macro quot label
+.macro quot label name behav
 	.section .text
 	.align CELL_SIZE
 \label:
@@ -96,7 +101,8 @@ hdr_\label:
 .lcomm obuf, BUFFER_SIZE
 .lcomm wbuf, WORD_BUFFER_SIZE
 .lcomm dmz, 4   # we append 4 bytes to wbuf
-
+.lcomm staging, BUFFER_SIZE
+.lcomm heap, BUFFER_SIZE   # TODO: Use brk/mmap
 
 # constants
 # variables
@@ -106,6 +112,9 @@ hdr_\label:
 .lcomm in_channel, CELL_SIZE
 .lcomm out_channel, CELL_SIZE
 
+.lcomm rs0, CELL_SIZE
+.lcomm hp, CELL_SIZE
+
 # exceptions
 
 # bootstrap code
@@ -113,10 +122,11 @@ hdr_\label:
 .align CELL_SIZE
 .globl _start
 _start:
-	mov $dstack+DS_SIZE, %esi
+	mov %esp, rs0
+	movl $heap, hp
 	movl $1, in_channel
 	movl $0, out_channel
-jmp _cold_start
+jmp reset
 
 .section .data
 .align CELL_SIZE, 0
@@ -127,19 +137,60 @@ blah:
 	.asciz "cheese"
 .align CELL_SIZE, 0
 
-quot _cold_start
-	lit $hello_world
-	call puts
-	lit $7
+quot reset
+	mov rs0, %esp  # flush RS
+	mov $dstack+DS_SIZE, %esi
+	mov $staging, %edi
+	movl $0, ibuf_fill
+	call begin
+endq compiler
+
+quot compiler
 	call word
 	call find
 	call eval
+endq compiler
+
+quot begin "[" behav=bImmed
+	lit %edi
+endq
+quot end "]" behav=bImmed  # tmp -- addr
+	# keep a copy of start addr for later (this
+	#   will be our new %edi after moving the
+	#   current quot
+	push %eax
+	# write `ret` to end current quot
+	movb $INS_RET, (%edi) # TODO: TCO
+	inc %edi
+	# calculate byte length to move
+	sub %eax, %edi
+	mov %edi, %ecx
+	# set dest from heap-ptr
+	mov hp, %edi
+	# save DSP and set src from ToS (temp addr left by begin)
+	push %esi
+	mov %eax, %esi
+	# move quotation to heap
+	rep movsb
+	# restore saved regs and push new quot addr
+	pop %esi
+	mov hp, %eax # new quot addr
+	mov %edi, hp
+	pop %edi
+	# over-write old location with `quote <new_loc>`
+	movl $0x89fc768d, (%edi)
+	movl $0x0000b806, 4(%edi)
+	lea 6(%edi), %edi
+	stosl
+endq
+
+quot bye behav=bImmed
+	lit $0
 endq exit
 
 quot exit
 	lit $__NR_exit
 endq syscall1
-publish exit
 
 quot syscall1 # arg no -- result
 	# call number already in %eax
@@ -208,7 +259,7 @@ quot otherwise  # x q -- q()
 	mov %eax, %edx
 	drop
 	drop
-	trash  # we don't return to the caller
+	# trash  # we don't return to the caller -- but tail-call optimisation deals with that
 endq *%edx
 
 
@@ -240,8 +291,7 @@ quot key  # -- byte
 		lit $_q_key_01
 	call case
 		lit $_q_key_02
-	call otherwise
-.byte 0xc3
+endq otherwise
 
 quot word  # -- word
 	# TODO: no test for too-long words
@@ -309,21 +359,49 @@ quot find_word  # str -- entry
 	nip
 endq
 
+.section .data
+.align CELL_SIZE
+msg_not_found:
+	.asciz " is not a dictionary word or number\n"
+
 quot not_found
-	lit $42
-endq exit
+	lit $wbuf
+	call puts
+	lit $msg_not_found
+	call puts
+endq reset
+
 quot find
 	call find_word
 	test %eax, %eax
 	jz not_found
+	mov BEHAVIOUR_OFFS(%eax), %edx
 	mov XT_OFFS(%eax), %eax
+	dup
+	mov %edx, %eax
 endq
 
-quot eval
+quot eval  #  q -- 
 	mov %eax, %edx
 	drop
 endq *%edx
 
+quot bImmed
+endq eval
+quot bCompiled  # xt -- 
+	# store call instruction
+	movb $INS_CALL, (%edi)
+	inc %edi
+	# calculate offset
+	lea 4(%edi), %edx
+	sub %edx, %eax
+	# store
+	stosl
+	drop
+endq
+
+
+#include "5w_stc_dict.h"
 
 .section .data
 .align CELL_SIZE
