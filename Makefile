@@ -21,6 +21,3 @@ $(DICT) : $(STEM).S
 	$(ASSEMBLER32) -o $@ $<
 
 
-inc/sys_defs.h :
-	cpp -dM $< > $@
-

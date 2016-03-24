@@ -95,6 +95,12 @@ hdr_\label:
 	lea 4(%esp), %esp
 .endm
 
+.macro fixup where
+	# create a fixup entry
+	mov \where, fxp
+	addl $CELL_SIZE, fxp
+.endm
+
 # buffers
 .lcomm ibuf, BUFFER_SIZE
 .lcomm dstack, DS_SIZE
@@ -102,6 +108,7 @@ hdr_\label:
 .lcomm wbuf, WORD_BUFFER_SIZE
 .lcomm dmz, 4   # we append 4 bytes to wbuf
 .lcomm staging, BUFFER_SIZE
+.lcomm fixup, BUFFER_SIZE
 .lcomm heap, BUFFER_SIZE   # TODO: Use brk/mmap
 
 # constants
@@ -114,6 +121,7 @@ hdr_\label:
 
 .lcomm rs0, CELL_SIZE
 .lcomm hp, CELL_SIZE
+.lcomm fxp, CELL_SIZE  # fixup table pointer
 
 # exceptions
 
@@ -126,6 +134,7 @@ _start:
 	movl $heap, hp
 	movl $1, in_channel
 	movl $0, out_channel
+	movl $fixup, fxp
 jmp reset
 
 .section .data
@@ -153,6 +162,16 @@ endq compiler
 
 quot begin "[" behav=bImmed
 	lit %edi
+	fixup $0
+endq
+quot _apply_fixes  # tmp -- tmp
+	mov %eax, %edx 
+	mov fxp, %ecx
+	sub hp, %edx   // %edx contains the distance code is being moved
+1:
+	sub $CELL_SIZE, %ecx
+	sub %edx, (%ecx)   # TODO: WORK-IN-PROGRESS
+	jmp 1b
 endq
 quot end "]" behav=bImmed  # tmp -- addr
 	# keep a copy of start addr for later (this
@@ -393,6 +412,7 @@ quot bCompiled  # xt --
 	movb $INS_CALL, (%edi)
 	inc %edi
 	# calculate offset
+	fixup %edi
 	lea 4(%edi), %edx
 	sub %edx, %eax
 	# store
