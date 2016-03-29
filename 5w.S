@@ -21,7 +21,7 @@
 	.long \codeword
 .endm
 
-.macro code label name
+.macro code label name behav
 	word \label prim_\label
 	.section .text
 	.align CELL_SIZE
@@ -32,11 +32,15 @@ prim_\label:
 	jmp *(%eax)
 .endm
 
-.macro quot label name
+.macro quot label name behav
 	word \label doWord
 .endm
-.macro endq
-	.long done
+.macro endq tail
+	.ifeqs "\tail", ""
+		.long done
+	.else
+		.long tail, \tail
+	.endif
 .endm
 
 .macro data label name
@@ -65,6 +69,22 @@ exc_\label:
 	.asciz "\label"
 .endm
 
+# headers
+.macro publish label name behav=bCompiled
+	.section .data
+	.align CELL_SIZE
+hdr_\label:
+	.long dlink, \label, \behav
+	.ifeqs "\name",""
+		.asciz "\label"
+	.else
+		.asciz "\name"
+	.endif
+	.align CELL_SIZE, 0
+.set dlink, hdr_\label
+.endm
+
+
 .macro pushrs reg
 	lea -CELL_SIZE(%ebp), %ebp
 	movl \reg, (%ebp)
@@ -92,10 +112,13 @@ exc_\label:
 .lcomm dstack, DS_SIZE
 .lcomm obuf, BUFFER_SIZE
 .lcomm wbuf, WORD_BUFFER_SIZE
+.lcomm scratch, SCRATCH_SIZE
 
 # constants
 # variables
 var hp  # heap pointer
+var rs0
+var ds0
 # exceptions
 
 # bootstrap code
@@ -104,19 +127,39 @@ var hp  # heap pointer
 .globl _start
 _start:
 	mov %esp, %ebp
+	mov %esp, var_rs0
 	mov $dstack+DS_SIZE, %esp
+	mov %esp, var_ds0
 	mov $cold_start, %esi
 next
 
-hello_world:
-	.asciz "Hello world!\n"
-
 .align CELL_SIZE
 cold_start:
+	.long reset
+
+quot reset
+	.long rs0, get, rspSet
+	.long lit, 0, ibuf_fill, set
+	.long lit, scratch, there
+	.long begin
+endq compiler
+
+exception Stack
+
+quot _q_dsck_001
+	.long Stack, raise
+endq
+quot dsck
+	.long dsp, lit, dstack, lit, obuf, btw
+		.long quote, nop
+		.long quote, _q_dsck_001
+	.long if
+endq
+
+quot compiler
+	.long dsck
 	.long word, find, call
-	.long word, puts
-	.long lit, hello_world, puts
-	.long lit, 0, exit 
+endq compiler
 
 
 ######################################################################
@@ -166,7 +209,7 @@ code syscall3  # arg3 arg2 arg1 id -- result
 	push %eax
 	poprs %ebx
 next
-code syscall6
+code syscall6  # arg6 arg5 arg4 arg3 arg2 arg1 id -- result
 	pushrs %ebx
 	pop %eax
 	mov %esp, %ebx
@@ -179,6 +222,9 @@ next
 
 
 # return-stack shuffling
+code rspSet "rsp!"  # addr -- 
+	pop %ebp
+next
 code push
 	pop %eax
 	pushrs %eax
@@ -250,43 +296,33 @@ code ret
 next
 
 # Quotation creation
-var nesting
-code begin "["
+code begin "["  behav=bImmed
 	# TODO: re-write to reflect new create-and-copy semantics
-	incl var_nesting
 	push %edi
 	mov $doWord, %eax
 	stosl
 next
-code end  "]"
-	# 1. write `done` to end current quot
-	mov $done, %eax
-	stosl
-	# 2. decrement `nesting`
-	decl var_nesting
-	# 3. save IP and set src from ToS (temp addr left by begin)
+code end  "]"  behav=bImmed  # tmp --
+	# write `done` to end current quot. TODO: tco
+	movl $done, (%edi)
+	# save IP and set src from ToS (temp addr left by begin)
 	pushrs %esi
 	mov (%esp), %esi
-	# 4. set dst from heap-ptr
+	# set dst from heap-ptr
 	mov var_hp, %edi   # heap-ptr to dst
-	# 5. call _keep to copy quot
+	# call _keep to copy quot
 	call _keep          # new location in %edx!
-	# 6. restore saved IP
+	# update hp
+	mov %edi, var_hp
+	# restore saved IP
 	poprs %esi
-	# 7. set dst to start of moved quotation (from ToS)
+	# set dst to start of moved quotation (from ToS)
 	pop %edi
-	# 8. over-write old location with `quote <new_loc>`
+	# over-write old location with `quote <new_loc>`
 	movl $quote, (%edi)
 	mov %edx, 4(%edi)
 	lea 8(%edi), %edi
-	# 9. if `nesting` is 0 update dst to new scratch addr
-	# TODO: allocate scratch as a separate area!
-	mov var_nesting, %eax
-	test %eax, %eax
-	jnz 1f
-	mov $SCRATCH_OFFSET, %edx
-	mov var_hp, %eax
-	lea (%eax, %edx), %edi
+	# update hp
 	mov $doWord, %eax
 	stosl
 1:
@@ -624,7 +660,6 @@ endq
 
 
 # dictionary search
-var dict
 exception NotFound
 quot _q_find_01
 	.long NotFound, raise
@@ -668,5 +703,14 @@ quot read_in  # len buf -- n
 endq
 
 
+quot bCompiled  # xt -- 
+	.long comma
+endq
+quot bImmed     # xt --
+	.long call
+endq
 
+#include "5w_dict.h"
+
+var dict dlink
 

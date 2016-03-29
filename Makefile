@@ -15,7 +15,7 @@ sloc: $(TARGET).S
 #	cat $< | grep -v '^\s*$$' | grep -v '^\s*#[^a-z]' | grep -v '^\s*//' | wc -l
 
 $(DICT) : $(STEM).S
-	grep '^quot\s\+[^_]' $< | awk '$$1="publish"' > $@
+	grep '^\(quot\|code\)\s\+[^_]' $< | awk '$$1="publish"' > $@
 
 %: %.S $(DICT)
 	$(ASSEMBLER32) -o $@ $<

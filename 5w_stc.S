@@ -1,4 +1,5 @@
 #include <asm/unistd.h>
+#include <asm/mman.h>
 
 .set dlink, 0
 
@@ -9,12 +10,12 @@
 .set BUFFER_SIZE, 4096
 .set WORD_BUFFER_SIZE, 256
 .set SCRATCH_SIZE, (128*1024)  # 128k
-.set SCRATCH_OFFSET, SCRATCH_SIZE
-
+.set HEAP_PAGE_SIZE, SCRATCH_SIZE  # ditto
 
 .set INS_CALL,    0xe8
 .set INS_LEA,     0x8d
 .set INS_RET,     0xc3
+.set INS_NOP,     0x90
 
 # headers
 .macro publish label name behav=bCompiled
@@ -95,35 +96,46 @@ hdr_\label:
 	lea 4(%esp), %esp
 .endm
 
-.macro fixup where
-	# create a fixup entry
-	mov \where, fxp
-	addl $CELL_SIZE, fxp
+.macro comparison ins
+	mov %eax, %ecx
+	npop %edx
+	xor %eax, %eax
+	cmpl %ecx, %edx
+	\ins %al
+	dec %eax
 .endm
+
 
 # buffers
 .lcomm ibuf, BUFFER_SIZE
 .lcomm dstack, DS_SIZE
 .lcomm obuf, BUFFER_SIZE
 .lcomm wbuf, WORD_BUFFER_SIZE
-.lcomm dmz, 4   # we append 4 bytes to wbuf
-.lcomm staging, BUFFER_SIZE
+.lcomm dmz, 4   # we append 4 null bytes to wbuf
+# .lcomm staging, BUFFER_SIZE
 .lcomm fixup, BUFFER_SIZE
-.lcomm heap, BUFFER_SIZE   # TODO: Use brk/mmap
+.lcomm data, BUFFER_SIZE
 
 # constants
 # variables
+.lcomm scratch, CELL_SIZE
+
 .lcomm ibuf_pos, CELL_SIZE
 .lcomm ibuf_fill, CELL_SIZE
+.lcomm obuf_pos, CELL_SIZE
 
 .lcomm in_channel, CELL_SIZE
 .lcomm out_channel, CELL_SIZE
 
 .lcomm rs0, CELL_SIZE
 .lcomm hp, CELL_SIZE
+.lcomm hpg, CELL_SIZE  # current heap page
 .lcomm fxp, CELL_SIZE  # fixup table pointer
+.lcomm dp, CELL_SIZE   # current data area pointer
 
 # exceptions
+.lcomm MMapFailed, CELL_SIZE
+.lcomm EndOfFile, CELL_SIZE
 
 # bootstrap code
 .section .text
@@ -131,25 +143,31 @@ hdr_\label:
 .globl _start
 _start:
 	mov %esp, rs0
-	movl $heap, hp
 	movl $1, in_channel
 	movl $0, out_channel
 	movl $fixup, fxp
+	mov $dstack+DS_SIZE, %esi
+	# allocate scratch page
+	lit $SCRATCH_SIZE
+	call code_buffer
+	mov %eax, scratch
+	drop
+	# ...and first heap page
+	lit $HEAP_PAGE_SIZE
+	call code_buffer
+	mov %eax, hpg
+	mov %eax, hp
+	drop
+	movl $bye, EndOfFile
+/*	call brk_addr
+	lit $dp
+	call set */
+	movl $data, dp
 jmp reset
-
-.section .data
-.align CELL_SIZE, 0
-hello_world:
-	.asciz "Hello world!\n"
-.align CELL_SIZE, 0
-blah:
-	.asciz "cheese"
-.align CELL_SIZE, 0
 
 quot reset
 	mov rs0, %esp  # flush RS
-	mov $dstack+DS_SIZE, %esi
-	mov $staging, %edi
+	mov scratch, %edi
 	movl $0, ibuf_fill
 	call begin
 endq compiler
@@ -160,20 +178,43 @@ quot compiler
 	call eval
 endq compiler
 
+quot _add_fixup # a? -- 
+	mov fxp, %edx
+	mov %eax, (%edx)
+	add $CELL_SIZE, fxp
+	drop
+endq
+
+quot align_hp # --
+	lit hp
+	movl $0x90909090, (%eax)
+	add $3, %eax
+	and $(~(CELL_SIZE-1)), %eax
+	mov %eax, hp
+	drop
+endq
 quot begin "[" behav=bImmed
 	lit %edi
-	fixup $0
+	lit $0
+	call _add_fixup
 endq
-quot _apply_fixes  # tmp -- tmp
-	mov %eax, %edx 
+quot _apply_fixes  # tmp offs -- tmp
+	# destructively apply fixups. Might want to preserve
+	# them for compilation purposes?
+	mov %eax, %edx
 	mov fxp, %ecx
-	sub hp, %edx   // %edx contains the distance code is being moved
 1:
 	sub $CELL_SIZE, %ecx
-	sub %edx, (%ecx)   # TODO: WORK-IN-PROGRESS
+	mov (%ecx), %eax
+	test %eax, %eax
+	jz 2f
+	sub %edx, (%eax)
 	jmp 1b
+2:	
+	mov %ecx, fxp
+	drop
 endq
-quot end "]" behav=bImmed  # tmp -- addr
+quot end "]" behav=bImmed  # tmp --
 	# keep a copy of start addr for later (this
 	#   will be our new %edi after moving the
 	#   current quot
@@ -181,6 +222,12 @@ quot end "]" behav=bImmed  # tmp -- addr
 	# write `ret` to end current quot
 	movb $INS_RET, (%edi) # TODO: TCO
 	inc %edi
+	# calculate move distance
+	dup
+	neg %eax
+	add hp, %eax
+	# apply fixups
+	call _apply_fixes
 	# calculate byte length to move
 	sub %eax, %edi
 	mov %edi, %ecx
@@ -191,9 +238,9 @@ quot end "]" behav=bImmed  # tmp -- addr
 	mov %eax, %esi
 	# move quotation to heap
 	rep movsb
-	# restore saved regs and push new quot addr
+	# restore saved regs
 	pop %esi
-	mov hp, %eax # new quot addr
+	mov hp, %eax # new quot addr for stosl
 	mov %edi, hp
 	pop %edi
 	# over-write old location with `quote <new_loc>`
@@ -201,6 +248,59 @@ quot end "]" behav=bImmed  # tmp -- addr
 	movl $0x0000b806, 4(%edi)
 	lea 6(%edi), %edi
 	stosl
+	drop
+endq align_hp
+quot as  behav=bImmed  # tmp -- tmp
+	# how we name code and data...
+	movb $INS_RET, (%edi)
+	push %eax  # Eval from the start of the most recent quot
+	call eval  # this must leave an address on the stack
+	pop %edi   # Erase the executed code.
+	call word  # get the name
+	call header # make a header
+endq
+
+quot header # xt str --
+	push %edi
+	swap
+	mov dp, %edi
+	lit dict
+	mov %edi, dict
+	stosl
+	drop
+	stosl
+	mov $bCompiled, %eax
+	stosl
+	drop
+	call keeps
+	drop
+endq
+
+quot udivmod  # u -- d r
+	mov %eax, %ebx
+	drop
+	xor %edx, %edx
+	divl %ebx
+	lit %edx
+endq
+
+
+quot keeps  # str -- addr
+	# move a temporary string to a permanent location
+	dup
+	call lens
+	mov %eax, %ecx
+	drop
+	inc %ecx
+	push %edi
+	push %esi
+	mov dp, %edi
+	mov %eax, %esi
+	rep movsb
+	mov %edi, dp
+	mov %edi, %eax
+	pop %esi
+	pop %edi
 endq
 
 quot bye behav=bImmed
@@ -221,6 +321,11 @@ quot syscall3  # arg3 arg2 arg1 no -- result
 	npop %ecx
 	npop %edx
 	int $0x80
+endq
+quot syscall6  # arg6 arg5 arg4 arg3 arg2 arg1 n -- result
+	mov %esi, %ebx
+	int $0x80
+	add $(6*CELL_SIZE), %esi
 endq
 
 quot lens  # str -- len
@@ -258,6 +363,93 @@ quot puts  # str --
 	call lens
 endq put
 
+quot setinc "@+"   # n addr -- addr+4
+	npop %edx
+	mov %edx, (%eax)
+	lea 4(%eax), %eax
+endq
+quot setbinc "@b+" # c addr -- addr+1
+	npop %edx
+	mov %dl, (%eax)
+	inc %eax
+endq
+
+quot putsign # n -- u
+	mov %eax, %edx
+	and $(0x80000000), %edx
+	test %edx, %edx
+	jz 1f
+	lit $'-'
+	call emit
+	neg %eax
+1:
+endq
+quot putn  # n -- 
+	call putsign
+	xor %ecx, %ecx
+1:
+	dec %ecx
+	test %eax, %eax
+	jz 2f
+	lit $10
+	call udivmod
+	add $'0', %eax
+	swap
+	jmp 1b
+2:
+	not %ecx
+	drop
+3:
+	dec %ecx
+	push %ecx
+	call emit
+	pop %ecx
+	test %ecx, %ecx
+	jnz 3b
+endq
+
+quot btw "btw?"   # x lower upper -- bool
+	mov %eax, %edx  # upper
+	drop            # lower into %eax
+	npop %ecx       # x
+	sub %eax, %edx  # upper-lower -> %edx
+	sub %eax, %ecx  # x-lower     -> %ecx
+	xor %eax, %eax  # 
+	cmp %edx, %ecx
+	seta %al
+	dec %eax
+endq
+quot eq "="
+	comparison setne
+endq
+
+
+quot get "@"  # addr -- val
+	mov (%eax), %eax
+endq
+quot set "!"  # val addr --
+	npop %edx
+	mov %edx, (%eax)
+	drop
+endq
+
+quot raise
+	mov (%eax), %eax
+	test %eax, %eax
+	jz unhandled
+endq eval
+
+quot unhandled
+	lit $str_failed
+	call puts
+	lit $1
+endq exit
+
+.section .data
+.align CELL_SIZE
+str_failed:
+	.asciz "Unhandled exception\n"
+
 quot case  # x x q -- q() | x y q -- x
 	# Pop q and y from stack. if x == y then drop x and run q 
 	# before returning from containing quotation, otherwise 
@@ -281,16 +473,44 @@ quot otherwise  # x q -- q()
 	# trash  # we don't return to the caller -- but tail-call optimisation deals with that
 endq *%edx
 
+quot code_buffer  # size -- addr
+	mov %eax, %edx                           # save len for later
+	xor %eax, %eax                           # push off
+	dup                                      # push dummy file descriptor
+	lit $(MAP_PRIVATE|MAP_ANONYMOUS)         # push flags
+	lit $(PROT_READ|PROT_WRITE|PROT_EXEC)    # push prot
+	lit %edx                                 # push len
+	lit $0                                   # push addr (not needed)
+	lit $__NR_mmap                           # push syscall number
+	call syscall6
+	dup
+	lit $-200     # mmap returns error codes between -200 and -1
+	lit $-1
+	call btw
+	drop      # ditch the boolean
+	jz 1f     # call succeeded - no error
+	lit $MMapFailed
+	call raise
+1:
+endq
 
+quot _q_read_in_01
+	lit $EndOfFile
+endq raise
 quot read_in  # len buf -- n
 	lit in_channel
 	lit $__NR_read
-endq syscall3
+	call syscall3
+	lit $0
+		lit $_q_read_in_01
+	call case
+endq
 
 quot _q_key_01  # --
 	lit $BUFFER_SIZE
 	lit $ibuf
 	call read_in
+	
 	mov %eax, ibuf_fill
 	drop
 	movl $ibuf, ibuf_pos
@@ -304,7 +524,6 @@ quot _q_key_02  # -- byte
 	mov (%edx), %al
 endq
 quot key  # -- byte
-	# TODO handle EOF
 	lit ibuf_fill
 	lit $0
 		lit $_q_key_01
@@ -412,7 +631,8 @@ quot bCompiled  # xt --
 	movb $INS_CALL, (%edi)
 	inc %edi
 	# calculate offset
-	fixup %edi
+	lit %edi
+	call _add_fixup
 	lea 4(%edi), %edx
 	sub %edx, %eax
 	# store
