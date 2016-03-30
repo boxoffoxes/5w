@@ -1,0 +1,259 @@
+#!/usr/bin/env 5w
+
+
+# compose
+
+[ 	( q1 q2 -- q )   ` [  ' inline bi  ` ]    ] as compose
+
+
+# Pattern matching
+
+# generalised matching: takes a predicate function and evaluates it
+# evaluating the body if it returns non-false
+[  push call  ] as when
+
+# case consumes the thing it compares to
+[ ( x b q --  ) ] as do-case
+[ ( w x q -- y  )
+	push matches? pop
+	swap [ nip pop trash push call ] [ drop ] ifte
+] as case
+
+# whereas match leaves a copy on the stack for its quotation
+[ ( w x q -- wq )
+	push matches?  pop
+	swap [ pop trash push call ] [ drop ] ifte
+] as match
+
+[ nip call ] as otherwise
+
+[	'e'  [ '\e' ]  case
+	'n'  [ '\n' ]  case
+	't'  [ '\t' ]  case
+	'0'  [  0   ]  case
+	'"'  [      ]  match
+	'\'  [      ]  match
+	     [ InvalidEscapeSequence raise ]  otherwise
+]  as handle-string-esc 
+
+
+[  word  %" Hello %s!\n" puts  ] as hello
+
+
+hello Glyn
+
+( 
+
+	Thoughts on compiling inline quotations (and strings/data blocks) without
+	the need for code and data instructions:
+
+	All quotations are built in an off-dictionary location (perhaps a
+	Forth-like scratch area beyond the end of the dictionary), then moved to
+	the dictionary (like the `as` instruction in Cantilever does) when
+	completed.
+
+	1. The first opening [ creates an xt in the scratch area, and pushes this
+	address to DS. Following instructions are compiled into Scratch.
+
+	2. The next opening [ creates an xt at the next free address in the scratch
+	area, even though this would cause a run-time error if executed.
+
+	3. Subsequent instructions are compiled at into Scratch.
+
+	4. Closing the inner quotation causes the quotation to be written back to
+	the dictionary with keep. The xt address is on ToS, and the scratch pointer
+	points to the end of the quotation.
+
+	5. The scratch pointer is re-set to the start of the inner quotation.
+
+	6. The address returned by keep is compiled as a `quote` at scratch-pointer
+
+	7. Compilation continues in this manner until...
+
+	8. ...the final closing ] `keep`s the outermost quotation, and pushes the
+	resulting address to DS for a subsequent `as`.
+
+	Inline strings and arrays can be handled the same way.
+
+	In cases where further nesting is not possible (i.e. strings can't contain
+	strings) data blocks can be compiled directly into the dictionary,
+	bypassing the scratch area. Being able to nest arrays might be useful
+	however!
+
+	Caveats:
+	
+	- ] needs two different behaviours: for the outermost quotation the result
+	  of keep is pushed to DS, while for deeper nested quotations it is
+	  compiled inline as a literal. This is similar to the handling of numeric
+	  literals, which are compiled when inside quotations, but pushed when
+	  outside.
+
+	- [ also needs two different behaviours if the scratch area is at some
+	  offset from the dictionary: if nesting depth is 0 then update the scratch
+	  area address (or the dictionary might catch-up with the scratch area),
+	  otherwise do not modify the destination address.
+
+	- The distance of the scratch area from the dictionary limits the maximum
+	  compiled size of a word, including headers for local definitions!)
+
+
+	If header creation is handled correctly, this compilation scheme could
+	allow easy scoping of local definitions...
+
+	if nesting is 0 then `as` creates a header for the word on ToS as usual.
+	Otherwise `as` checks that the previously compiled word was a quote, pushes
+	it to DS, rewinds the scratch-pointer, and makes a local definition. The
+	header can only be put at dict-pointer if it is kept permanently, and just
+	unlinked from the dictionary list at the end of the current quotation.
+
+	There is a single local dictionary variable, which is equal to the global
+	dictionary variable when outside of a quotation.
+
+	Local variables:
+	
+	- for variables defined with `as` a single copy of the local variable is
+	  shared between all calls of the word (exactly like defining a variable
+	  outside of a quotation, except without polluting the global namespace).
+	- for variables defined with `locals` each call to the word gets its own
+	  copy of the variable, allocated on the return stack, and possibly
+	  initialised from the data-stack.
+	- any word may reference variables defined with `locals` from within the
+	  innermost stack frame, using the `1 $$` notation (even if outside of the
+	  lexical scope in which the frame was declared), however a new call to
+	  `locals` or `frame` hides all earlier variables declared with `locals`
+	  
+	The scratch area should be 128k from the dictionary, and at least 128k in
+	size. When scratch is called it checks memory availability and tries to
+	double the allocation if there is insufficient to meet these criteria.
+
+)
+
+# Modules and scoping...
+[	# local declarations
+	10 const as blah
+	[ ] as wiffle
+	# API functions
+	[ ] as hamster
+	[ s" hello" puts ] as cheese
+
+	{ hamster cheese } exported
+] as-module funky
+
+( compiles to (&G is the top entry in the global dict)...
+	a: doconst 10
+	b: <&G header for blah &a>
+	c: doword ret
+	d: <&b header for wiffle &c>
+	e: doword ret
+	f: <&d header for hamster &e>
+	g: dodata 2 "hell" "o\0\0\0"
+	h: doword &g puts ret
+	i: <&f header for cheese &h>
+	j: dodata 2 hamster cheese
+	k: doword &j exported ret
+	l: <&i header for funky &k>
+
+	This raises the question of how the 10 const gets compiled! Does const have
+	a complex behaviour when used inside quotations? Perhaps impose the
+	restriction that named local declarations have to be occur at the beginning
+	of a quotation, and simply execute the preceding code as in a Cantilever
+	anonymous code block.
+
+What does a header look like?
+
+	<link> <handler> <xt> <stack-effect> label...
+
+	The only variable length field is label, so that can be inline. <xt> points
+	to the execution token for the word. Handler defines what type of word it
+	is (immediate, normal...)
+	
+)
+
+
+# What might a string formatter look like when compiled?
+[ 40  s" Glyn"  %" hello %s, you are %d\n" puts ]
+
+(	v: dodata 2 "Glyn"  "\0\0\0\0"
+	w: dodata 2 "hell"  "o \0\0\0"
+	x: dodata 3 ", yo"  "u ar"  "e·\0\0"
+	y: dodata 1 "\n\0\0\0"
+	z: doword clear-obuf &v &w %s %s &x %s %d &y %s obuf puts ret
+)
+
+
+( Possible alternative syntax for stack-effect diagrams...
+
+	[	blah wiffle
+		cheese
+	:: a b -- c ] as whatever
+
+)
+
+
+# Jump table implementation
+
+[	[ ] as zero
+	[ ] as one
+	[ ] as two+
+
+	{ zero one two+ } as jump-table
+	
+	# bounds-check
+	jump-table length 1-  umin
+		jump-table nth call
+:: n -- ]
+
+# a more useful example...
+declare fib
+[	[ drop 1 ] as terminal
+	[ 1- dup 1- ' fib bi + ] as other
+	{ terminal terminal other } as fib-table
+][	dup
+	fib-table length 1-  umin
+		fib-table nth call
+:: n -- fib(n) ] as fib
+
+
+# Sorting sequences
+
+[ { 10 9 7 2 3 5 1 } destructive-sort ]
+
+
+# Subroutine-threaded code implementation...
+
+( There seem to be several benefits to implementing this as STC instead of ITC:
+
+	- performance
+	- ease of adding a peephole optimiser for literals and tail-calls
+	- ease of debugging and profiling
+	- ease of reasoning about RS behaviour
+
+  The disadvantage is an increase in complexity of call instruction generation,
+  due to code being created in a scratch area then copied to its final
+  location. x86 uses relative offsets for near-calls that aren't in registers
+  or memory. An added complication is that for locally scoped words, code may
+  need to run in-situ in the scratch area, so offsets to already-defined
+  functions need to be correct.
+
+  Possible solutions:
+
+  	1. all calls go via a register.
+	2. `keep` parses instructions and updates address as it goes(!)
+	3. revert to using inlined `code` and `data` macros to obviate the need for moving compiled code
+
+  The first option is simple to implement, but adds an extra instruction per call (which is still likely to be faster than ITC).
+
+  The second increases the complexity of the compiler significantly, requiring a `relocate` function that understands (a subset of) x86 opcodes. But it gives the option to apply post-hoc optimisations (like using one-byte offsets for jmp when the target is within 128 bytes). Maybe allocate a fixup-table to track the locations of all relative addresses stored in the scratch area...?
+
+  What needs storing in the fixup-table?
+
+  	- relative call and jmp offsets to locations _outside_ the scratch area
+	- absolute references to literal values in the scratch area (are there any?)
+
+  the fixup table could be stored as byte-offsets from the beginning of the quotation
+
+  The optimiser might use this information instead of a last-compiled variable...
+
+
+)
+
