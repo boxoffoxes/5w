@@ -14,10 +14,10 @@ sloc: $(TARGET).S
 	grep -v '^\s*\(\|#[^a-z].*\)$$' $< | wc -l
 #	cat $< | grep -v '^\s*$$' | grep -v '^\s*#[^a-z]' | grep -v '^\s*//' | wc -l
 
-$(DICT) : $(STEM).S
+%_dict.h : %.S
 	grep '^\(quot\|code\)\s\+[^_]' $< | awk '$$1="publish"' > $@
 
-%: %.S $(DICT)
+%: %.S %_dict.h
 	$(ASSEMBLER32) -o $@ $<
 
 

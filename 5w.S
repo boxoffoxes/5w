@@ -1,12 +1,15 @@
 #include <asm/unistd.h>
 #include <asm/mman.h>
 
+#define MKSCANF(len) "%" #len "s"
+
 .set CELL_BITS, 2
 .set CELL_SIZE, (1<<CELL_BITS)
 
 .set DS_SIZE, (256*CELL_SIZE)
 .set BUFFER_SIZE, 4096
-.set WORD_BUFFER_SIZE, 256
+.set MAX_WORD_LEN, 255
+.set WORD_BUFFER_SIZE, MAX_WORD_LEN+1
 .set SCRATCH_SIZE, (128*1024)  # 128k
 .set SCRATCH_OFFSET, SCRATCH_SIZE
 
@@ -107,12 +110,25 @@ hdr_\label:
 	push %ecx
 .endm
 
+
+.macro ccall sym, nargs
+	pushrs %ebx   # make space for RSP
+	mov %ebp, %ebx
+	lea \nargs*CELL_SIZE(%esp), %ebp    # pretend we're a C program...
+	call \sym
+	add $\nargs*CELL_SIZE, %esp      # drop the args
+	mov %ebx, %ebp
+	poprs %ebx
+.endm
+	
+
 # buffers
 .lcomm ibuf, BUFFER_SIZE
 .lcomm dstack, DS_SIZE
 .lcomm obuf, BUFFER_SIZE
 .lcomm wbuf, WORD_BUFFER_SIZE
 .lcomm scratch, SCRATCH_SIZE
+.lcomm heap, BUFFER_SIZE  # TODO: fixme
 
 # constants
 # variables
@@ -120,17 +136,22 @@ var hp  # heap pointer
 var rs0
 var ds0
 # exceptions
+# strings
+.section .data
+.align CELL_SIZE
+scanf_word: .asciz MKSCANF(MAX_WORD_LEN)
 
 # bootstrap code
 .section .text
 .align CELL_SIZE
-.globl _start
-_start:
+.globl main
+main:
 	mov %esp, %ebp
 	mov %esp, var_rs0
 	mov $dstack+DS_SIZE, %esp
 	mov %esp, var_ds0
 	mov $cold_start, %esi
+	movl $heap, var_hp
 next
 
 .align CELL_SIZE
@@ -297,7 +318,6 @@ next
 
 # Quotation creation
 code begin "["  behav=bImmed
-	# TODO: re-write to reflect new create-and-copy semantics
 	push %edi
 	mov $doWord, %eax
 	stosl
@@ -322,10 +342,6 @@ code end  "]"  behav=bImmed  # tmp --
 	movl $quote, (%edi)
 	mov %edx, 4(%edi)
 	lea 8(%edi), %edi
-	# update hp
-	mov $doWord, %eax
-	stosl
-1:
 next
 
 
@@ -533,6 +549,7 @@ endq
 
 
 # input
+
 var ibuf_fill
 var ibuf_pos
 const IbufSize BUFFER_SIZE
@@ -712,5 +729,5 @@ endq
 
 #include "5w_dict.h"
 
-var dict dlink
+var dict, dlink
 
