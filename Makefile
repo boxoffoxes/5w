@@ -1,4 +1,4 @@
-ASSEMBLER32=gcc -static -nostdlib -m32 -g 
+ASSEMBLER32=gcc -static -m32 -g 
 STEM=5w_stc
 TARGET=$(STEM)
 DICT=$(STEM)_dict.h

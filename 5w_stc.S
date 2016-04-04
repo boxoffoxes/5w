@@ -17,6 +17,7 @@
 .set INS_RET,     0xc3
 .set INS_NOP,     0x90
 
+
 # headers
 .macro publish label name behav=bCompiled
 	.section .data
@@ -105,6 +106,15 @@ hdr_\label:
 	dec %eax
 .endm
 
+.macro call_c sym, nargs
+	dup   # make sure arg1 is on the stack
+	xchg %esi, %esp   # save having to move our args
+	lea \nargs*CELL_SIZE(%esp), %ebp    # we start behaving like a C program...
+	call \sym
+	add $\nargs*CELL_SIZE, %esp      # drop the args
+	xchg %esi, %esp
+.endm
+
 
 # buffers
 .lcomm ibuf, BUFFER_SIZE
@@ -115,6 +125,7 @@ hdr_\label:
 # .lcomm staging, BUFFER_SIZE
 .lcomm fixup, BUFFER_SIZE
 .lcomm data, BUFFER_SIZE
+
 
 # constants
 # variables
@@ -140,8 +151,8 @@ hdr_\label:
 # bootstrap code
 .section .text
 .align CELL_SIZE
-.globl _start
-_start:
+.globl main
+main:
 	mov %esp, rs0
 	movl $1, in_channel
 	movl $0, out_channel
@@ -163,6 +174,10 @@ _start:
 	lit $dp
 	call set */
 	movl $data, dp
+	lit $'Z'
+	call emit
+	lit $'\n'
+	call emit
 jmp reset
 
 quot reset
@@ -341,7 +356,15 @@ quot lens  # str -- len
 	dec %eax        # because we counted the \0
 endq
 
-quot emit # c --
+pct_c: .asciz "%c"
+
+quot emit  # c --
+	lit $pct_c
+	call_c printf, 2
+	drop
+endq
+
+/* quot emit # c --
 	lit $1    # length char is nos
 	mov %esi, %edx
 	lit %edx  # using the stack as a buffer
@@ -351,6 +374,7 @@ quot emit # c --
 	drop  # return val
 	drop  # original char
 endq
+*/
 quot put # str len -- 
 	swap
 	lit out_channel  # stdout -- TODO
@@ -647,3 +671,11 @@ endq
 .align CELL_SIZE
 dict:
 	.long dlink
+
+gdlab:
+	.space BUFFER_SIZE*4   # dictionary labels (max 15 chars + \0)
+ldlab: .space BUFFER_SIZE*4   # local dictionary labels (max 15 chars + \0)
+
+gdxt: .space BUFFER_SIZE      # dictionary XTs
+ldxt: .space BUFFER_SIZE      # local dictionary XTs
+
