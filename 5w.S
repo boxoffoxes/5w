@@ -17,15 +17,29 @@
 .set XT_OFFS       , 2*CELL_SIZE
 .set LABEL_OFFS    , 3*CELL_SIZE
 
-.macro word label codeword
+.macro word label codeword name behav=bCompiled
 	.section .data
+label_\label:
+	.ifeqs "\name", ""
+		.asciz "\label"
+	.else
+		.asciz "\name"
+	.endif
 	.align CELL_SIZE
 \label:
 	.long \codeword
+
+	.section .dict.label
+		.long label_\label
+	.section .dict.xt
+		.long \label
+	.section .dict.behav
+		.long \behav
+	.section .data
 .endm
 
 .macro code label name behav
-	word \label prim_\label
+	word \label prim_\label "\name" \behav
 	.section .text
 	.align CELL_SIZE
 prim_\label:
@@ -36,7 +50,7 @@ prim_\label:
 .endm
 
 .macro quot label name behav
-	word \label doWord
+	word \label doWord "\name" \behav
 .endm
 .macro endq tail
 	.ifeqs "\tail", ""
@@ -47,7 +61,7 @@ prim_\label:
 .endm
 
 .macro data label name
-	word \label doData
+	word \label doData "\name" \behav
 	.long (9999f-.)>>CELL_BITS
 .endm
 .macro endd
@@ -56,35 +70,20 @@ prim_\label:
 .endm
 
 .macro var label val=0 name
-	word \label doVar
+	word \label doVar "\name"
 var_\label:
 	.long \val
 .endm
 .macro const label val name
-	word \label doConst
+	word \label doConst "\name"
 const_\label:
 	.long \val
 .endm
 .macro exception label
-	word \label doVar
+	word \label doVar 
 exc_\label:
 	.long 0
-	.asciz "\label"
-.endm
-
-# headers
-.macro publish label name behav=bCompiled
-	.section .data
-	.align CELL_SIZE
-hdr_\label:
-	.long dlink, \label, \behav
-	.ifeqs "\name",""
-		.asciz "\label"
-	.else
-		.asciz "\name"
-	.endif
-	.align CELL_SIZE, 0
-.set dlink, hdr_\label
+	.long label_\label
 .endm
 
 
@@ -119,8 +118,21 @@ hdr_\label:
 	add $\nargs*CELL_SIZE, %esp      # drop the args
 	mov %ebx, %ebp
 	poprs %ebx
+	# result is in %eax if you need it
 .endm
 	
+# the Dictionary™
+.section .dict.label
+.align CELL_SIZE
+names:
+
+.section .dict.xt
+.align CELL_SIZE
+xts:
+
+.section .dict.behav
+.align CELL_SIZE
+behavs:
 
 # buffers
 .lcomm ibuf, BUFFER_SIZE
@@ -140,6 +152,14 @@ var ds0
 .section .data
 .align CELL_SIZE
 scanf_word: .asciz MKSCANF(MAX_WORD_LEN)
+.align CELL_SIZE
+printf_c: .asciz "%c"
+.align CELL_SIZE
+printf_d: .asciz "%d"
+.align CELL_SIZE
+printf_s: .asciz "%s"
+.align CELL_SIZE
+hello_world: .asciz "hello world\n"
 
 # bootstrap code
 .section .text
@@ -212,6 +232,19 @@ next
 
 # Syscall primitives for OS interface
 
+code fficall  # arg1 ... argn sym nargs 
+	pop %eax
+	pop %edx
+	pushrs %ebx   # make space for RSP
+	mov %ebp, %ebx
+	lea (%esp, %eax, CELL_SIZE), %ebp    # pretend we're a C program...
+	call *%edx
+	mov %ebp, %esp
+	# add $\nargs*CELL_SIZE, %esp      # drop the args
+	mov %ebx, %ebp
+	poprs %ebx
+	push %eax # result
+next
 code syscall1
 	pushrs %ebx
 	pop %eax
@@ -241,6 +274,10 @@ code syscall6  # arg6 arg5 arg4 arg3 arg2 arg1 id -- result
 next
 
 
+code sub "-"  # x y -- x-y
+	pop %eax
+	sub %eax, (%esp)
+next
 
 # return-stack shuffling
 code rspSet "rsp!"  # addr -- 
@@ -312,7 +349,7 @@ code done
 	poprs %esi
 next
 code ret
-	# ret is for mid-quotation returns. Perhaps remove?
+	# ret is for mid-quotation returns. Is this really needed?
 	poprs %esi
 next
 
@@ -536,8 +573,10 @@ endq
 quot mmap  # fd flags prot len -- addr
 	.long push, push, push, push
 	#     offs    fd   flag prot len  addr
-	.long lit, 0, pop, pop, pop, pop, lit, 0, lit, __NR_mmap, syscall6
-	.long dup, lit, -200, lit, -1, btw,  quote, _q_mmap_01,   if_true
+	.long lit, 0, pop, pop, pop, pop, lit, 0
+	/*, lit, __NR_mmap, syscall6 */
+	.long lit, mmap, lit, 6, fficall
+	.long dup,  quote, _q_mmap_01,   if_true  # mmap returns -1 on failure
 endq
 quot buffer  # len -- addr
 	.long push
@@ -622,15 +661,27 @@ code eqs  # str str -- bool
 next
 
 # output
-quot emit  # c --
+code emit
+	push $printf_c
+	ccall printf nargs=2
+next
+/* quot emit  # c --
 	.long dsp, lit, 1, swap, out_channel, get, lit, __NR_write, syscall3, drop
-endq
+endq */
 quot put   # s n -- 
 	.long swap, out_channel, get, lit, __NR_write, syscall3, drop
 endq
-quot puts  # s -- 
+code putn  # n -- 
+	push $printf_d
+	ccall printf nargs=2
+next
+code puts  # s --
+	push $printf_s
+	ccall printf nargs=2
+next
+/* quot puts  # s -- 
 	.long dup, lens, put
-endq
+endq */
 
 
 
@@ -663,32 +714,6 @@ quot if_true
 	.long quote, nop, if
 endq
 
-# header creation and access
-quot .behaviour
-	.long lit, BEHAVIOUR_OFFS, add
-endq
-quot .xt
-	.long lit, XT_OFFS, add
-endq
-quot .label
-	.long lit, LABEL_OFFS, add
-endq
-
-
-
-# dictionary search
-exception NotFound
-quot _q_find_01
-	.long NotFound, raise
-endq
-quot _q_find_02  # str dict -- str dict'
-	.long get, lit, 0, quote, _q_find_01, case
-	.long over, over, .label, eqs
-endq
-quot find  # str -- xt behav 
-	.long dict,  quote, _q_find_02,  until
-	.long dup, .xt, get,  swap, .behaviour, get
-endq
 /* 
 [	
 	dict [	get  0 [ raise NotFound ] case
@@ -719,6 +744,8 @@ quot read_in  # len buf -- n
 	.long lit, __NR_read, syscall3
 endq
 
+quot find
+endq
 
 quot bCompiled  # xt -- 
 	.long comma
@@ -727,7 +754,7 @@ quot bImmed     # xt --
 	.long call
 endq
 
-#include "5w_dict.h"
+var dict_size
 
-var dict, dlink
+
 
