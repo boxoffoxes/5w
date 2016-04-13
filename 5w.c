@@ -11,6 +11,7 @@
 #define SCANW "%31s"
 #define HEAP_SIZE (1024*1024*16)
 
+#define ENTRY(lab, x, bh) { .label=(lab), .xt=(x), .behav=(bh) }
 
 int ds[DS_SIZE];
 int rs[RS_SIZE];
@@ -25,6 +26,8 @@ int decimalPlaces = 5;
 
 enum FWPrims {
 	VarDecimalPlaces,
+	VarNotFound,
+	VarInvalidNumber,
 	PrimLit,
 	PrimWord,
 	PrimFind,
@@ -33,13 +36,26 @@ enum FWPrims {
 	PrimPutn,
 	PrimExit,
 	PrimCall,
+	PrimBegin,
+	PrimEnd,
+	PrimDone,
+	PrimCompile,
+	PrimCompileLiteral,
+	PrimRaise,
 };
 
+// we use an actual pointer for label, because otherwise
+// it's very hard to add labels to words at compile-time!
 typedef struct Entry {
-	int label, xt, behav;
+	char *label;
+	int xt, behav;
 } Entry;
-Entry dict[DICT_SIZE];
-int dictSize = 0;
+Entry dict[DICT_SIZE] = {
+	ENTRY("decimal-places", VarDecimalPlaces, PrimCompileLiteral),
+	ENTRY("NotFound", VarNotFound, PrimCompileLiteral),
+	ENTRY("InvalidNumber", VarInvalidNumber, PrimCompileLiteral),
+};
+int dictSize = 2;
 
 #define push(v)  do { *(--dsp) = (v); } while (0)
 #define pop()    (*(dsp++))
@@ -47,7 +63,7 @@ int dictSize = 0;
 
 #define addr(n) (heap+(n))
 
-#define compile(v) do { heap[hp++] = v; } while (0)
+#define compile(v) do { scr[sp++] = v; } while (0)
 
 // define wbuf to be somewhere in the heap
 #define wbuf (hp+1024)
@@ -114,7 +130,7 @@ int number(const char *word) {
 		case '-':  // this is a date
 			if (sscanf(rest, "-%2u-%2u", &m, &d) != 2)
 				return 0;
-			makeLilianDate(n, m, d);
+			return makeLilianDate(n, m, d);
 			break;
 		case ':':  // this is a time
 			if (sscanf(rest, ":%2u:%2u", &m, &d) != 2)
@@ -130,8 +146,8 @@ int number(const char *word) {
 int dictSearch(const char *word) {
 	int i;
 	char *lbl;
-	for (i=dictSize; i>=0; i++) {
-		lbl = (char*) addr(dict[i].label);
+	for (i=dictSize-1; i>=0; i--) {
+		lbl = dict[i].label;
 		if (strcmp(word, lbl) == 0) {
 			push(dict[i].xt);
 			push(dict[i].behav);
@@ -156,11 +172,16 @@ void procOpcode(int op) {
 			push( wbuf );
 			break;
 		case PrimFind:   // str -- xt behav
-			dictSearch( (char*) addr(pop()) );
+			if ( !dictSearch( (char*) addr(pop()) ) ) {
+				push(VarNotFound);
+				procOpcode(PrimRaise);
+			}
 			break;
 		case PrimNumber:  // str -- n
-			if ( !number( (char*) addr(pop()) ) )
-				exit(1);
+			if ( !number( (char*) addr(pop()) ) ) {
+				push(VarInvalidNumber);
+				procOpcode(PrimRaise);
+			}
 			break;
 		case PrimPuts:
 			printf("%s", addr(pop()));
@@ -173,6 +194,24 @@ void procOpcode(int op) {
 			break;
 		case PrimCall:
 			procOpcode(pop());
+			break;
+		case PrimDone:
+			break;
+		case PrimBegin:
+			push(sp);
+			break;
+		case PrimEnd:
+			compile(PrimDone);
+			break;
+		case PrimCompileLiteral:
+			compile(PrimLit);
+			// deliberate fallthough!
+		case PrimCompile:
+			compile(pop());
+			break;
+		case PrimRaise:
+			printf("Unhandled Exception\n");
+			exit(1);
 			break;
 		default:
 			break;
