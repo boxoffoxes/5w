@@ -224,8 +224,8 @@ void op(int o) {
 		case PrimEnd:
 			compile(PrimDone);
 			i = keep(scr+peek(), sp-peek());
-			push(i);
-			op(PrimCall);
+			compile(PrimLit);
+			compile(i);
 			break;
 		case PrimCompileLiteral:
 			compile(PrimLit);
