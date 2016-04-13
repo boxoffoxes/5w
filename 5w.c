@@ -13,6 +13,12 @@
 
 #define ENTRY(lab, x, bh) { .label=(lab), .xt=(x), .behav=(bh) }
 
+#ifdef NDEBUG
+#define debug(...)
+#else
+#define debug(...) do { fprintf(stderr, __VA_ARGS__); } while (0)
+#endif
+
 int ds[DS_SIZE];
 int rs[RS_SIZE];
 
@@ -20,7 +26,7 @@ int scr[SCRATCH_SIZE];
 int *heap;
 
 int *ip, *dsp, *rsp;
-int hp, sp;
+int hp=64, sp;
 
 int decimalPlaces = 5;
 
@@ -42,6 +48,7 @@ enum FWPrims {
 	PrimCompile,
 	PrimCompileLiteral,
 	PrimRaise,
+	PrimTail,
 };
 
 // we use an actual pointer for label, because otherwise
@@ -54,12 +61,20 @@ Entry dict[DICT_SIZE] = {
 	ENTRY("decimal-places", VarDecimalPlaces, PrimCompileLiteral),
 	ENTRY("NotFound", VarNotFound, PrimCompileLiteral),
 	ENTRY("InvalidNumber", VarInvalidNumber, PrimCompileLiteral),
+	ENTRY("[", PrimBegin, PrimCall),
+	ENTRY("]", PrimEnd,  PrimCall),
+	ENTRY("exit", PrimExit, PrimCompile),
+	ENTRY("putn", PrimPutn, PrimCompile),
+	ENTRY(NULL, 0,0),
 };
-int dictSize = 2;
+int dictSize;
 
 #define push(v)  do { *(--dsp) = (v); } while (0)
 #define pop()    (*(dsp++))
 #define peek()   (*(dsp))
+
+#define pushrs(v) do { *(--rsp) = (v); } while (0)
+#define poprs()   (*(rsp++))
 
 #define addr(n) (heap+(n))
 
@@ -155,14 +170,20 @@ int dictSearch(const char *word) {
 		}
 	}
 	if ( number(word) ) {
-		push(PrimPutn);
+		push(PrimCompileLiteral);
 		return 1;
 	}
 	return 0;
 }
+int keep(int *from, int len) {
+	int dst = hp;
+	memcpy(heap+hp, from, len*sizeof(int));
+	return dst;
+}
 
-void procOpcode(int op) {
-	switch (op) {
+void op(int o) {
+	int i;
+	switch (o) {
 		case PrimLit:
 			push(*ip++);
 			break;
@@ -174,13 +195,13 @@ void procOpcode(int op) {
 		case PrimFind:   // str -- xt behav
 			if ( !dictSearch( (char*) addr(pop()) ) ) {
 				push(VarNotFound);
-				procOpcode(PrimRaise);
+				op(PrimRaise);
 			}
 			break;
 		case PrimNumber:  // str -- n
 			if ( !number( (char*) addr(pop()) ) ) {
 				push(VarInvalidNumber);
-				procOpcode(PrimRaise);
+				op(PrimRaise);
 			}
 			break;
 		case PrimPuts:
@@ -193,7 +214,7 @@ void procOpcode(int op) {
 			exit(pop());
 			break;
 		case PrimCall:
-			procOpcode(pop());
+			op(pop());
 			break;
 		case PrimDone:
 			break;
@@ -202,6 +223,9 @@ void procOpcode(int op) {
 			break;
 		case PrimEnd:
 			compile(PrimDone);
+			i = keep(scr+peek(), sp-peek());
+			push(i);
+			op(PrimCall);
 			break;
 		case PrimCompileLiteral:
 			compile(PrimLit);
@@ -209,23 +233,29 @@ void procOpcode(int op) {
 		case PrimCompile:
 			compile(pop());
 			break;
+		case PrimTail:
+			ip = ip + *ip; 
+			break;
 		case PrimRaise:
 			printf("Unhandled Exception\n");
 			exit(1);
 			break;
 		default:
+			pushrs(ip);
+			ip = addr(o);
 			break;
 	}
 }
 
 
 int main(int argc, char **argv) {
-	int prog[] = {PrimWord, PrimFind, PrimCall, PrimLit, 17, PrimExit};
+	int prog[] = {PrimWord, PrimFind, PrimCall, PrimTail, -4};
 	dsp = &ds[DS_SIZE];
 	rsp = &rs[RS_SIZE];
 	heap = malloc(HEAP_SIZE);
 	ip = prog;
-	for (;;procOpcode(*ip++));
+	for (;dict[dictSize].label != NULL; dictSize++);
+	for (;;op(*ip++));
 	return 0;
 }
 
