@@ -32,6 +32,7 @@ enum FWPrims {
 	PrimPuts,
 	PrimPutn,
 	PrimExit,
+	PrimCall,
 };
 
 typedef struct Entry {
@@ -137,7 +138,11 @@ int dictSearch(const char *word) {
 			return 1;
 		}
 	}
-	return number(word);
+	if ( number(word) ) {
+		push(PrimPutn);
+		return 1;
+	}
+	return 0;
 }
 
 void procOpcode(int op) {
@@ -150,10 +155,10 @@ void procOpcode(int op) {
 				exit(1);
 			push( wbuf );
 			break;
-		case PrimFind:
+		case PrimFind:   // str -- xt behav
 			dictSearch( (char*) addr(pop()) );
 			break;
-		case PrimNumber:
+		case PrimNumber:  // str -- n
 			if ( !number( (char*) addr(pop()) ) )
 				exit(1);
 			break;
@@ -166,6 +171,9 @@ void procOpcode(int op) {
 		case PrimExit:
 			exit(pop());
 			break;
+		case PrimCall:
+			procOpcode(pop());
+			break;
 		default:
 			break;
 	}
@@ -173,7 +181,7 @@ void procOpcode(int op) {
 
 
 int main(int argc, char **argv) {
-	int prog[] = {PrimWord, PrimNumber, PrimPutn, PrimLit, 17, PrimExit};
+	int prog[] = {PrimWord, PrimFind, PrimCall, PrimLit, 17, PrimExit};
 	dsp = &ds[DS_SIZE];
 	rsp = &rs[RS_SIZE];
 	heap = malloc(HEAP_SIZE);
