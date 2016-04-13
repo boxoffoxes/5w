@@ -122,15 +122,15 @@ exc_\label:
 .endm
 	
 # the Dictionary™
-.section .dict.label
+.section .dict.label, "aw"
 .align CELL_SIZE
 names:
 
-.section .dict.xt
+.section .dict.xt, "aw"
 .align CELL_SIZE
 xts:
 
-.section .dict.behav
+.section .dict.behav, "aw"
 .align CELL_SIZE
 behavs:
 
@@ -167,7 +167,7 @@ hello_world: .asciz "hello world\n"
 .globl main
 main:
 	mov %esp, %ebp
-	mov %esp, var_rs0
+	mov %ebp, var_rs0
 	mov $dstack+DS_SIZE, %esp
 	mov %esp, var_ds0
 	mov $cold_start, %esi
@@ -179,10 +179,10 @@ cold_start:
 	.long reset
 
 quot reset
-	.long rs0, get, rspSet
-	.long lit, 0, ibuf_fill, set
-	.long lit, scratch, there
-	.long begin
+	.long rs0, get, rspSet         # clear RS
+	.long lit, 0, ibuf_fill, set   # flush input buffer
+	.long lit, scratch, there      # flush the scratch area
+	.long begin                    # start compiling
 endq compiler
 
 exception Stack
@@ -744,7 +744,28 @@ quot read_in  # len buf -- n
 	.long lit, __NR_read, syscall3
 endq
 
+exception NotFound
+code _q_find_01  # str -- ind
+	xor %ecx, %ecx
+1:
+	mov $names, %eax
+	mov (%eax, %ecx, CELL_SIZE), %eax
+	test %eax, %eax
+	jz 2f
+	push (%esp)   # dup
+	push %eax
+	pushrs %ecx
+	ccall strcmp nargs=2
+	poprs %ecx
+	inc %ecx
+	test %eax, %eax
+	jnz 1b
+2:
+	mov %ecx, (%esp)
+next
 quot find
+	.long _q_find_01, call	
+	.long putn, nl
 endq
 
 quot bCompiled  # xt -- 
@@ -757,4 +778,13 @@ endq
 var dict_size
 
 
+# null-terminate dicts. TODO: temporary measure
+# until we move dicts to a more permanent location
+# at load
+.section .dict.names
+	.long 0
+.section .dict.xts
+	.long 0
+.section .dict.behavs
+	.long 0
 
