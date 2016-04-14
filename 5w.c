@@ -1,6 +1,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #define DS_SIZE 1024
 #define RS_SIZE 1024
@@ -20,13 +21,15 @@
 #endif
 
 int ds[DS_SIZE];
-int rs[RS_SIZE];
 
 int scr[SCRATCH_SIZE];
 int *heap;
 
-int *ip, *dsp, *rsp;
+int *ip, *dsp;
 int hp=64, sp;
+
+void *rs[RS_SIZE];
+void **rsp;
 
 int decimalPlaces = 5;
 
@@ -44,6 +47,8 @@ enum FWPrims {
 	PrimCall,
 	PrimBegin,
 	PrimEnd,
+	PrimAs,
+	PrimKeeps,
 	PrimDone,
 	PrimCompile,
 	PrimCompileLiteral,
@@ -61,8 +66,11 @@ Entry dict[DICT_SIZE] = {
 	ENTRY("decimal-places", VarDecimalPlaces, PrimCompileLiteral),
 	ENTRY("NotFound", VarNotFound, PrimCompileLiteral),
 	ENTRY("InvalidNumber", VarInvalidNumber, PrimCompileLiteral),
+
 	ENTRY("[", PrimBegin, PrimCall),
 	ENTRY("]", PrimEnd,  PrimCall),
+	ENTRY("as", PrimAs, PrimCall),
+
 	ENTRY("exit", PrimExit, PrimCompile),
 	ENTRY("putn", PrimPutn, PrimCompile),
 	ENTRY(NULL, 0,0),
@@ -82,6 +90,8 @@ int dictSize;
 
 // define wbuf to be somewhere in the heap
 #define wbuf (hp+1024)
+
+#define fail(...) do { printf(__VA_ARGS__); exit(1); } while (0)
 
 #define LILIAN_CORRECTION 6346
 const int monTable[] = {306,337,0,31,61,92,122,153,184,214,245,275};
@@ -183,6 +193,7 @@ int keep(int *from, int len) {
 
 void op(int o) {
 	int i;
+	// assert(dsp<=ds+DS_SIZE);
 	switch (o) {
 		case PrimLit:
 			push(*ip++);
@@ -217,16 +228,40 @@ void op(int o) {
 			op(pop());
 			break;
 		case PrimDone:
+			ip = poprs();
 			break;
+
+		/* word creation words */
 		case PrimBegin:
 			push(sp);
 			break;
 		case PrimEnd:
 			compile(PrimDone);
 			i = keep(scr+peek(), sp-peek());
+			sp = pop();
 			compile(PrimLit);
 			compile(i);
 			break;
+		case PrimAs: // --
+			// compile PrimDone to scr
+			compile(PrimDone);
+			// eval scr from addr on ds (where we get our xt)
+			pushrs(ip);
+
+			// read next word
+			op(PrimWord);
+			op(PrimKeeps);
+			dict[dictSize].label = (char*)addr(pop());
+			dict[dictSize].xt = pop();
+			dict[dictSize].behav = PrimCompile;
+			ip = poprs();
+			break;
+		case PrimKeeps:
+			i = hp;
+			strcpy((char*)addr(hp), (char*)addr(pop()));
+			push(i);
+			break;
+
 		case PrimCompileLiteral:
 			compile(PrimLit);
 			// deliberate fallthough!
@@ -245,6 +280,8 @@ void op(int o) {
 			ip = addr(o);
 			break;
 	}
+	if (dsp > ds+HEAP_SIZE)
+		fail("Stack underflow after evaluating op %d\n", o);
 }
 
 
