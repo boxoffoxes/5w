@@ -49,6 +49,7 @@ enum FWPrims {
 	PrimEnd,
 	PrimAs,
 	PrimKeeps,
+	PrimImm,
 	PrimDone,
 	PrimCompile,
 	PrimCompileLiteral,
@@ -70,6 +71,7 @@ Entry dict[DICT_SIZE] = {
 	ENTRY("[", PrimBegin, PrimCall),
 	ENTRY("]", PrimEnd,  PrimCall),
 	ENTRY("as", PrimAs, PrimCall),
+	ENTRY(":imm", PrimImm, PrimCall),
 
 	ENTRY("exit", PrimExit, PrimCompile),
 	ENTRY("putn", PrimPutn, PrimCompile),
@@ -120,7 +122,6 @@ int makeLilianDate(int y, int m, int d) {
 	push(y);
 	return 1;
 }
-
 int number(const char *word) {
 	char *rest;
 	unsigned int m, d, i;
@@ -188,9 +189,11 @@ int dictSearch(const char *word) {
 int keep(int *from, int len) {
 	int dst = hp;
 	memcpy(heap+hp, from, len*sizeof(int));
+	hp += len;
 	return dst;
 }
 
+void eval(int*);
 void op(int o) {
 	int i;
 	// assert(dsp<=ds+DS_SIZE);
@@ -199,7 +202,7 @@ void op(int o) {
 			push(*ip++);
 			break;
 		case PrimWord:
-			if ( scanf(SCANW, addr(wbuf)) < 0 )
+			if ( scanf(SCANW, (char*)addr(wbuf)) < 0 )
 				exit(1);
 			push( wbuf );
 			break;
@@ -216,7 +219,7 @@ void op(int o) {
 			}
 			break;
 		case PrimPuts:
-			printf("%s", addr(pop()));
+			printf("%s", (char*)addr(pop()));
 			break;
 		case PrimPutn:
 			printf("%d", pop());
@@ -246,20 +249,25 @@ void op(int o) {
 			// compile PrimDone to scr
 			compile(PrimDone);
 			// eval scr from addr on ds (where we get our xt)
-			pushrs(ip);
-
+			sp = peek();  // delete evaluated code
+			eval(scr+sp);
 			// read next word
 			op(PrimWord);
 			op(PrimKeeps);
 			dict[dictSize].label = (char*)addr(pop());
 			dict[dictSize].xt = pop();
 			dict[dictSize].behav = PrimCompile;
+			dictSize++;
 			ip = poprs();
 			break;
 		case PrimKeeps:
 			i = hp;
-			strcpy((char*)addr(hp), (char*)addr(pop()));
+			strcpy((char*)addr(hp), (char*)addr(peek()));
 			push(i);
+			hp += strlen((char*)addr(pop())) + 4 / sizeof(int);
+			break;
+		case PrimImm:
+			dict[dictSize-1].behav = PrimCall;
 			break;
 
 		case PrimCompileLiteral:
@@ -283,6 +291,16 @@ void op(int o) {
 	if (dsp > ds+HEAP_SIZE)
 		fail("Stack underflow after evaluating op %d\n", o);
 }
+void eval(int *code) {
+	// evaluate some code, returning when PrimDone is encoutered
+	int o;
+	void **rsp0 = rsp;
+	pushrs(ip);
+	ip=code;
+	while (*ip != PrimDone)
+		op(*ip++);
+//	for (ip=code;*ip!=PrimDone; op(*ip++));
+}
 
 
 int main(int argc, char **argv) {
@@ -291,6 +309,7 @@ int main(int argc, char **argv) {
 	rsp = &rs[RS_SIZE];
 	heap = malloc(HEAP_SIZE);
 	ip = prog;
+	push(0);
 	for (;dict[dictSize].label != NULL; dictSize++);
 	for (;;op(*ip++));
 	return 0;
