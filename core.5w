@@ -1,23 +1,8 @@
+[ 10 ] as '\n'
 
-# %" hello %s!\n" is actually a function: [ obuf_pos @ push s" hello " %s %s s" !\n" %s pop ]
+[ [ key '\n' = ]  [ ]  until ] as # :imm
 
-[ ( addr -- )   dup length [ @+ , ] times   ] as clone
+# ...and now we have comments. Yay.
 
-# declare/implements: pre-declare a word so that it can be used before it is
-# defined (e.g. for recursive or mutually recursive words). A default
-# implementation is provided that raises an UnimplementedWord exception if the
-# word is called before a real definition is provided with `implements`. 
-
-[ 	word keeps header
-	[ raise-unimplemented ] clone
-] as declare
-
-[	' tail   word find drop  1 cell after   !+ !+  ] as implements
-
-
-[	stash call pop swap  [  ] [ drop ] if  ] as while
-
-
-
-[ 1 2 + putn ] as test
+[ ? call ] as if
 

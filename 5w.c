@@ -20,64 +20,85 @@
 #define debug(...) do { fprintf(stderr, __VA_ARGS__); } while (0)
 #endif
 
-int ds[DS_SIZE];
+long ds[DS_SIZE];
 
-int scr[SCRATCH_SIZE];
-int *heap;
+long scr[SCRATCH_SIZE];
+long *heap;
 
-int *ip, *dsp;
-int hp=64, sp;
+long *ip, *dsp;
+long hp=64, sp;
 
 void *rs[RS_SIZE];
 void **rsp;
 
-int decimalPlaces = 5;
+long decimalPlaces = 5;
 
 enum FWPrims {
-	VarDecimalPlaces,
-	VarNotFound,
-	VarInvalidNumber,
+	VarDecimalPlaces, VarNotFound, VarInvalidNumber,
+
 	PrimLit,
-	PrimWord,
-	PrimFind,
-	PrimNumber,
-	PrimPuts,
-	PrimPutn,
-	PrimExit,
-	PrimCall,
-	PrimBegin,
-	PrimEnd,
-	PrimAs,
+
+	PrimKey, PrimWord,
+
+	PrimFind, PrimNumber,
+
+	PrimPutc, PrimPuts, PrimPutn,
+
+	PrimExit, PrimCall, PrimTail, PrimTailToS, PrimDone,
+
+	PrimBegin, PrimEnd, PrimAs, PrimImm, PrimEval,
+
+	PrimDup, PrimDrop, PrimOver, PrimSwap,
+
+	PrimEq,
+	PrimQM, PrimUntil,
+
 	PrimKeeps,
-	PrimImm,
-	PrimDone,
 	PrimCompile,
 	PrimCompileLiteral,
 	PrimRaise,
-	PrimTail,
 };
 
 // we use an actual pointer for label, because otherwise
 // it's very hard to add labels to words at compile-time!
 typedef struct Entry {
 	char *label;
-	int xt, behav;
+	long xt, behav;
 } Entry;
 Entry dict[DICT_SIZE] = {
 	ENTRY("decimal-places", VarDecimalPlaces, PrimCompileLiteral),
 	ENTRY("NotFound", VarNotFound, PrimCompileLiteral),
 	ENTRY("InvalidNumber", VarInvalidNumber, PrimCompileLiteral),
 
+	ENTRY("'", PrimLit, PrimCompile),
+
 	ENTRY("[", PrimBegin, PrimCall),
 	ENTRY("]", PrimEnd,  PrimCall),
 	ENTRY("as", PrimAs, PrimCall),
 	ENTRY(":imm", PrimImm, PrimCall),
+	ENTRY(";;", PrimEval, PrimCall),
+
+	ENTRY("key",  PrimKey,  PrimCompile),
+	ENTRY("word", PrimWord, PrimCompile),
+
+	ENTRY("dup", PrimDup, PrimCompile),
+	ENTRY("swap", PrimSwap, PrimCompile),
+	ENTRY("drop", PrimDrop, PrimCompile),
+	ENTRY("over", PrimOver, PrimCompile),
+
+	ENTRY("?", PrimQM, PrimCompile),
+	ENTRY("until", PrimUntil, PrimCompile),
+	ENTRY("call", PrimCall, PrimCompile),
+
+	ENTRY("=", PrimEq, PrimCompile),
 
 	ENTRY("exit", PrimExit, PrimCompile),
 	ENTRY("putn", PrimPutn, PrimCompile),
+	ENTRY("putc", PrimPutc, PrimCompile),
+	ENTRY("puts", PrimPuts, PrimCompile),
 	ENTRY(NULL, 0,0),
 };
-int dictSize;
+long dictSize;
 
 #define push(v)  do { *(--dsp) = (v); } while (0)
 #define pop()    (*(dsp++))
@@ -96,9 +117,9 @@ int dictSize;
 #define fail(...) do { printf(__VA_ARGS__); exit(1); } while (0)
 
 #define LILIAN_CORRECTION 6346
-const int monTable[] = {306,337,0,31,61,92,122,153,184,214,245,275};
+const long monTable[] = {306,337,0,31,61,92,122,153,184,214,245,275};
 
-int makeLilianDate(int y, int m, int d) {
+long makeLilianDate(long y, long m, long d) {
 	// Lilian date is a count of days since the 
 	// start of the Gregorian calendar, where
 	// 15 Oct 1582 is day 1 (note _not_ day 0!)
@@ -122,10 +143,10 @@ int makeLilianDate(int y, int m, int d) {
 	push(y);
 	return 1;
 }
-int number(const char *word) {
+long number(const char *word) {
 	char *rest;
-	unsigned int m, d, i;
-	int n = strtol(word, &rest, 10);
+	unsigned long m, d, i;
+	long n = strtol(word, &rest, 10);
 	if (word == rest)
 		return 0;
 	switch (*rest) {
@@ -154,12 +175,12 @@ int number(const char *word) {
 			push(n);
 			break;
 		case '-':  // this is a date
-			if (sscanf(rest, "-%2u-%2u", &m, &d) != 2)
+			if (sscanf(rest, "-%2lu-%2lu", &m, &d) != 2)
 				return 0;
 			return makeLilianDate(n, m, d);
 			break;
 		case ':':  // this is a time
-			if (sscanf(rest, ":%2u:%2u", &m, &d) != 2)
+			if (sscanf(rest, ":%2lu:%2lu", &m, &d) != 2)
 				return 0;
 			push(n*3600+m*60+d);
 			break;
@@ -169,8 +190,8 @@ int number(const char *word) {
 	}
 	return 1;
 }
-int dictSearch(const char *word) {
-	int i;
+long dictSearch(const char *word) {
+	long i;
 	char *lbl;
 	for (i=dictSize-1; i>=0; i--) {
 		lbl = dict[i].label;
@@ -186,20 +207,23 @@ int dictSearch(const char *word) {
 	}
 	return 0;
 }
-int keep(int *from, int len) {
-	int dst = hp;
-	memcpy(heap+hp, from, len*sizeof(int));
+long keep(long *from, long len) {
+	long dst = hp;
+	memcpy(heap+hp, from, len*sizeof(long));
 	hp += len;
 	return dst;
 }
 
-void eval(int*);
-void op(int o) {
-	int i;
+void eval(long*);
+void op(long o) {
+	long i;
 	// assert(dsp<=ds+DS_SIZE);
 	switch (o) {
 		case PrimLit:
 			push(*ip++);
+			break;
+		case PrimKey:
+			push(getc(stdin));
 			break;
 		case PrimWord:
 			if ( scanf(SCANW, (char*)addr(wbuf)) < 0 )
@@ -218,11 +242,14 @@ void op(int o) {
 				op(PrimRaise);
 			}
 			break;
+		case PrimPutc:
+			printf("%c", (int) pop());
+			break;
 		case PrimPuts:
 			printf("%s", (char*)addr(pop()));
 			break;
 		case PrimPutn:
-			printf("%d", pop());
+			printf("%ld", pop());
 			break;
 		case PrimExit:
 			exit(pop());
@@ -246,11 +273,8 @@ void op(int o) {
 			compile(i);
 			break;
 		case PrimAs: // --
-			// compile PrimDone to scr
-			compile(PrimDone);
 			// eval scr from addr on ds (where we get our xt)
-			sp = peek();  // delete evaluated code
-			eval(scr+sp);
+			op(PrimEval);
 			// read next word
 			op(PrimWord);
 			op(PrimKeeps);
@@ -264,10 +288,60 @@ void op(int o) {
 			i = hp;
 			strcpy((char*)addr(hp), (char*)addr(peek()));
 			push(i);
-			hp += strlen((char*)addr(pop())) + 4 / sizeof(int);
+			hp += strlen((char*)addr(pop())) + 4 / sizeof(long);
 			break;
-		case PrimImm:
+		case PrimImm:  // make previously defined word immediate
 			dict[dictSize-1].behav = PrimCall;
+			break;
+
+		case PrimDup:
+			push(peek());
+			break;
+		case PrimDrop:
+			dsp++;
+			break;
+		case PrimOver:
+			push(*(dsp+2));
+			break;
+		case PrimSwap:
+			do {
+				int tos = pop(), nos = pop();
+				push(tos);
+				push(nos);
+			} while (0);
+			break;
+
+		case PrimEq:
+			if (pop() == pop())
+				push(-1);
+			else
+				push(0);
+			break;
+
+		case PrimQM:
+			do {
+				int e=pop(), t=pop();
+				if (pop())
+					push(t);
+				else
+					push(e);
+			} while (0);
+			break;
+		case PrimUntil:
+			do {
+				int body=pop(), pred=pop();
+				eval(addr(pred));
+				while (!pop()) {
+					eval(addr(body));
+					eval(addr(pred));
+				}
+			} while (0);
+			break;
+
+		case PrimEval:
+			compile(PrimDone); // compile PrimDone to scr
+			sp = peek();  // evaluated code is not kept
+			eval(scr+sp);
 			break;
 
 		case PrimCompileLiteral:
@@ -279,6 +353,9 @@ void op(int o) {
 		case PrimTail:
 			ip = ip + *ip; 
 			break;
+		case PrimTailToS:
+			ip = addr(pop());
+			break;
 		case PrimRaise:
 			printf("Unhandled Exception\n");
 			exit(1);
@@ -289,24 +366,24 @@ void op(int o) {
 			break;
 	}
 	if (dsp > ds+HEAP_SIZE)
-		fail("Stack underflow after evaluating op %d\n", o);
+		fail("Stack underflow after evaluating op %ld\n", o);
 }
-void eval(int *code) {
+void eval(long *code) {
 	// evaluate some code, returning when PrimDone is encoutered
-	int o;
+	long o;
 	void **rsp0 = rsp;
 	pushrs(ip);
 	ip=code;
-	while (*ip != PrimDone)
+	while (rsp < rsp0)
 		op(*ip++);
 //	for (ip=code;*ip!=PrimDone; op(*ip++));
 }
 
 
-int main(int argc, char **argv) {
-	int prog[] = {PrimWord, PrimFind, PrimCall, PrimTail, -4};
-	dsp = &ds[DS_SIZE];
-	rsp = &rs[RS_SIZE];
+long main(long argc, char **argv) {
+	long prog[] = {PrimWord, PrimFind, PrimCall, PrimTail, -4};
+	dsp = ds+DS_SIZE;
+	rsp = rs+RS_SIZE;
 	heap = malloc(HEAP_SIZE);
 	ip = prog;
 	push(0);
