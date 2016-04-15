@@ -20,6 +20,12 @@
 #define debug(...) do { fprintf(stderr, __VA_ARGS__); } while (0)
 #endif
 
+#ifdef TRACE
+#define trace(o) do { long mO=(o); fprintf(stderr, "%p: %d %s", ip, mO, dictRevSrch(mO)); } while (0)
+#else
+#define trace(o)
+#endif
+
 long ds[DS_SIZE];
 
 long scr[SCRATCH_SIZE];
@@ -50,7 +56,9 @@ enum FWPrims {
 
 	PrimDup, PrimDrop, PrimOver, PrimSwap,
 
-	PrimEq,
+	PrimGet, PrimSet,
+
+	PrimEq, PrimEqs,
 	PrimQM, PrimUntil,
 
 	PrimKeeps,
@@ -80,17 +88,20 @@ Entry dict[DICT_SIZE] = {
 
 	ENTRY("key",  PrimKey,  PrimCompile),
 	ENTRY("word", PrimWord, PrimCompile),
+	ENTRY("keeps", PrimKeeps, PrimCompile),
 
 	ENTRY("dup", PrimDup, PrimCompile),
 	ENTRY("swap", PrimSwap, PrimCompile),
 	ENTRY("drop", PrimDrop, PrimCompile),
 	ENTRY("over", PrimOver, PrimCompile),
+	ENTRY("_ret", PrimDone, PrimCompile),
 
 	ENTRY("?", PrimQM, PrimCompile),
 	ENTRY("until", PrimUntil, PrimCompile),
 	ENTRY("call", PrimCall, PrimCompile),
 
 	ENTRY("=", PrimEq, PrimCompile),
+	ENTRY("eqs", PrimEqs, PrimCompile),
 
 	ENTRY("exit", PrimExit, PrimCompile),
 	ENTRY("putn", PrimPutn, PrimCompile),
@@ -108,7 +119,6 @@ long dictSize;
 #define poprs()   (*(rsp++))
 
 #define addr(n) (heap+(n))
-
 #define compile(v) do { scr[sp++] = v; } while (0)
 
 // define wbuf to be somewhere in the heap
@@ -190,6 +200,14 @@ long number(const char *word) {
 	}
 	return 1;
 }
+char *dictRevSrch(int xt) {
+	long i;
+	for (i=dictSize-1; i>=0; i--) {
+		if (dict[i].xt == xt)
+			return dict[i].label;
+	}
+	return "";
+}
 long dictSearch(const char *word) {
 	long i;
 	char *lbl;
@@ -217,6 +235,7 @@ long keep(long *from, long len) {
 void eval(long*);
 void op(long o) {
 	long i;
+	trace(o);
 	// assert(dsp<=ds+DS_SIZE);
 	switch (o) {
 		case PrimLit:
@@ -282,7 +301,6 @@ void op(long o) {
 			dict[dictSize].xt = pop();
 			dict[dictSize].behav = PrimCompile;
 			dictSize++;
-			ip = poprs();
 			break;
 		case PrimKeeps:
 			i = hp;
@@ -311,8 +329,21 @@ void op(long o) {
 			} while (0);
 			break;
 
+		case PrimGet:
+			push(heap[pop()]);
+			break;
+		case PrimSet:
+			heap[pop()] = pop();
+			break;
+
 		case PrimEq:
 			if (pop() == pop())
+				push(-1);
+			else
+				push(0);
+			break;
+		case PrimEqs:
+			if (strcmp((char*)addr(pop()), (char*)addr(pop()))==0)
 				push(-1);
 			else
 				push(0);
