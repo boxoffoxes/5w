@@ -200,6 +200,35 @@ long number(const char *word) {
 	}
 	return 1;
 }
+
+int esc=0;
+char strEsc(char c) {
+	switch (c*esc) {
+		case 0: break;  // esc not set
+		case  '0': c = '\0'; break;
+		case  'n': c = '\n'; break;
+		case  't': c = '\t'; break;
+		case  '"': c = '"' ; break;
+		case '\\': c = '\\'; break;
+		default: fail("invalid escape sequence '\\%c'\n", c);
+	}
+	esc = c == '\\' ? 1 : 0;
+	return c;
+}
+void mkStr(char *word) {
+	int len = strlen(word), c, loc=hp;
+	char *dst = (char*)addr(hp), *src = word;
+	while (c = *src == '\0' ? getc(stdin) : *src++) {
+		if (c == '"' && !esc)
+			break;
+		if ( (c=strEsc(c)) != '\\' ) {
+			*dst++ = c;
+			len++;
+		}
+	}
+	hp += (len + 4) / sizeof(long);
+	push(loc);
+}
 char *dictRevSrch(int xt) {
 	long i;
 	for (i=dictSize-1; i>=0; i--) {
@@ -208,7 +237,7 @@ char *dictRevSrch(int xt) {
 	}
 	return "";
 }
-long dictSearch(const char *word) {
+long dictSearch(char *word) {
 	long i;
 	char *lbl;
 	for (i=dictSize-1; i>=0; i--) {
@@ -219,7 +248,17 @@ long dictSearch(const char *word) {
 			return 1;
 		}
 	}
-	if ( number(word) ) {
+	if ( word[0] == '\'' ) {
+		// char literal
+		push(word[1]);
+		push(PrimCompileLiteral);
+		return 1;
+	} else if (word[0] == '"') {
+		// string literal
+		mkStr(word+1);
+		push(PrimCompileLiteral);
+		return 1;
+	} else if ( number(word) ) {
 		push(PrimCompileLiteral);
 		return 1;
 	}
