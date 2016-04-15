@@ -7,3 +7,8 @@
 [ ? call ] as if
 
 
+# [ dup [ @ 1 + ] dip ! ] as inc-var
+
+# 0 var as comment-depth
+# [ comment-depth inc-var [ word ")" eqs ] [ ] until ] as ( :imm
+

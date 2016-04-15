@@ -212,7 +212,7 @@ char strEsc(char c) {
 		case '\\': c = '\\'; break;
 		default: fail("invalid escape sequence '\\%c'\n", c);
 	}
-	esc = c == '\\' ? 1 : 0;
+	esc = c == '\\' && !esc ? 1 : 0;
 	return c;
 }
 void mkStr(char *word) {
